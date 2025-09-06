@@ -1,0 +1,114 @@
+'use server';
+
+import { z } from 'zod';
+import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
+
+import pg from 'pg';
+const { Client } = pg;
+
+const FormSchema = z.object({         //DM Zod data validation object
+  id: z.string(),
+  customerId: z.string(),
+  amount: z.coerce.number(),           //DM Change it from String to number
+  status: z.enum(['pending', 'paid']),
+  date: z.string(),
+});
+
+const CreateInvoice = FormSchema.omit({ id: true, date: true }); //DM id and date omitted
+const UpdateInvoice = FormSchema.omit({ id: true, date: true }); //DM id and date omitted 
+ 
+export async function createInvoice(formData: FormData) {
+  const { customerId, amount, status } = CreateInvoice.parse({  //DM validate and transform the data
+    customerId: formData.get('customerId'),
+    amount: formData.get('amount'),
+    status: formData.get('status'),
+  });
+  const amountInCents = amount * 100;                  //DM Calculate the  amount in cents 
+  const date = new Date().toISOString().split('T')[0]; //DM Invoice date as YYYY-MM-DD
+  // Test it out:
+  //console.log('customerId = ', customerId);
+  //console.log('amount, cents = ', amountInCents);
+  //console.log('status = ', status);
+  //console.log('invoice date = ', date)
+
+  //insert data into the DB
+  try {
+    const client = new Client({      
+      user: process.env.POSTGRES_USER,
+      host: process.env.POSTGRES_HOST,
+      database: process.env.POSTGRES_DATABASE,
+      password: process.env.POSTGRES_PASSWORD,
+      port: Number(process.env.POSTGRES_PORT),
+    });    
+    await client.connect();
+    const result = await client.query(`insert into invoices 
+      (customer_id, amount, status, date)
+      values ($1, $2, $3, $4)`, [customerId, amountInCents, status, date]);    
+    await client.end();
+    //console.log("invoice insert result:",result.rows); 
+    //return result.rows;    
+  } catch (error) {
+    //We'll log the error to the console for now 
+    console.error(error);
+  }
+
+  //clear the cache and redirect the user
+  revalidatePath('/dashboard/invoices'); //DM  DB updated, thus the path revalidated to fetch fresh data from server
+  redirect('/dashboard/invoices');       //DM redirect the user back to the invoices page from the form
+}
+
+export async function updateInvoice(id: string, formData: FormData) {
+  const { customerId, amount, status } = UpdateInvoice.parse({
+    customerId: formData.get('customerId'),
+    amount: formData.get('amount'),
+    status: formData.get('status'),
+  });
+ 
+  const amountInCents = amount * 100;
+ 
+  try {
+    const client = new Client({
+      user: process.env.POSTGRES_USER,
+      host: process.env.POSTGRES_HOST,
+      database: process.env.POSTGRES_DATABASE,
+      password: process.env.POSTGRES_PASSWORD,
+      port: Number(process.env.POSTGRES_PORT),
+    });    
+    await client.connect();
+    const result = await client.query(`update invoices 
+      set customer_id = $1, amount = $2, status = $3
+      where id = $4`, [customerId, amountInCents, status, id]);    
+    await client.end();
+    //console.log("invoice update result:",result.rows); 
+    //return result.rows;    
+  } catch (error) {
+    //We'll log the error to the console for now
+    console.error(error);
+  }
+ 
+  revalidatePath('/dashboard/invoices');
+  redirect('/dashboard/invoices');
+}
+
+export async function deleteInvoice(id: string) { 
+  try {
+    const client = new Client({
+      user: process.env.POSTGRES_USER,
+      host: process.env.POSTGRES_HOST,
+      database: process.env.POSTGRES_DATABASE,
+      password: process.env.POSTGRES_PASSWORD,
+      port: Number(process.env.POSTGRES_PORT),
+    });    
+    await client.connect();
+    const result = await client.query(`delete from invoices 
+      where id = $1`, [id]);    
+    await client.end();
+    //console.log("invoice insert result:",result.rows); 
+    //return result.rows;    
+  } catch (error) {
+    console.error('Database Error:', error);
+    throw new Error('Failed to delete invoice data.');
+  }  
+  revalidatePath('/dashboard/invoices'); //DM initiate a new server request and re-render the invoice table
+}
